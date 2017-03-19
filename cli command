@@ -1,0 +1,16 @@
+cash
+CORE_PEER_ADDRESS=172.19.0.3:7051 CORE_PEER_COMMITTER_LEDGER_ORDERER=172.19.0.2:7050 peer chaincode deploy -C myc2 -n cashcc -p github.com/hyperledger/fabric/cash -c '{"Args":["init"]}'
+
+CORE_PEER_ADDRESS=172.19.0.5:7051 CORE_PEER_COMMITTER_LEDGER_ORDERER=172.19.0.2:7050 peer chaincode invoke -C myc2 -n cashcc -c '{"function":"query","Args":["central bank"]}'
+
+CORE_PEER_ADDRESS=172.19.0.5:7051 CORE_PEER_COMMITTER_LEDGER_ORDERER=172.19.0.2:7050 peer chaincode invoke -C myc2 -n cashcc -c '{"function":"invoke","Args":["central bank","a","100"]}'
+
+
+
+loan
+CORE_PEER_ADDRESS=172.19.0.3:7051 CORE_PEER_COMMITTER_LEDGER_ORDERER=172.19.0.2:7050 peer chaincode deploy -C myc2 -n loan9 -p github.com/hyperledger/fabric/loan -c '{"Args":["init"]}'
+
+CORE_PEER_ADDRESS=172.19.0.5:7051 CORE_PEER_COMMITTER_LEDGER_ORDERER=172.19.0.2:7050 peer chaincode invoke -C myc2 -n loan9 -c '{"function":"offer","Args":["cc01","a","b","101","cashcc"]}'
+
+CORE_PEER_ADDRESS=172.19.0.5:7051 CORE_PEER_COMMITTER_LEDGER_ORDERER=172.19.0.2:7050 peer chaincode invoke -C myc2 -n loan9 -c '{"function":"query","Args":["cc01"]}'
+
