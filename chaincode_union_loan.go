@@ -120,6 +120,7 @@ func (t *UnionLoanChainCode) offer(stub shim.ChaincodeStubInterface, args []stri
 			fmt.Printf(errStr)
 			return shim.Error(errStr)
 		}
+		i += 1
 	}
 
 	return shim.Success(loanByte)
