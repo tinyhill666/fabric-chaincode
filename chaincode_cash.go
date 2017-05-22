@@ -5,170 +5,278 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	pb "github.com/hyperledger/fabric/protos/peer"
 )
 
-// 作为p2p借贷系统中投资方所拥有的资产合约，表示谁欠他钱
-type UnionLoanChainCode struct {
+// 作为p2p借贷系统中基础的资金合约
+type CashChaincode struct {
 }
 
-//json序列化 字段需要大写开头
-
-//参加贷款的银行以及参贷金额
-type Participant struct {
-	BankName string
-	Balance  float64
-}
-
-type UnionLoan struct {
-	Customer     string
-	Balance      float64
-	Leader       string
-	Participants [10]Participant
+type Account struct {
+	Balance float64
 }
 
 // Init 函数初始化造币，
-func (t *UnionLoanChainCode) Init(stub shim.ChaincodeStubInterface) pb.Response {
+func (t *CashChaincode) Init(stub shim.ChaincodeStubInterface) pb.Response {
+	//var value float64 // State of event
+	var err error
+	_, args := stub.GetFunctionAndParameters()
+	if len(args) != 0 {
+		return shim.Error("Incorrect number of arguments. Expecting 0")
+	}
+
+	// Initialize the chaincode
+	var account Account
+	account.Balance = 1000000
+	fmt.Printf("init money = %d\n", account.Balance)
+
+	cashByte, err := json.Marshal(account)
+	if err != nil {
+		return shim.Error("build json failed!")
+	}
+
+	err = stub.PutState("pbc", cashByte)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+
+	err = stub.PutState("cb", cashByte)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
 
 	return shim.Success(nil)
 }
-func (t *UnionLoanChainCode) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
+func (t *CashChaincode) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
+	fmt.Println("cash Invoke")
 	function, args := stub.GetFunctionAndParameters()
-	if function == "offer" {
-		return t.offer(stub, args)
+	if function == "invoke" {
+		// Make payment of X units from A to B
+		return t.invoke(stub, args)
 	} else if function == "query" {
+		// the old "Query" is now implemtned in invoke
 		return t.query(stub, args)
+	} else if function == "transferN2A" {
+		// the old "Query" is now implemtned in invoke
+		return t.transferN2A(stub, args)
 	}
 
 	return shim.Error("Invalid invoke function name. Expecting \"invoke\" \"delete\" \"query\"")
 }
 
-func (t *UnionLoanChainCode) offer(stub shim.ChaincodeStubInterface, args []string) pb.Response {
-	var amt float64 //temp
+// Transaction makes payment of X units from A to B
+func (t *CashChaincode) invoke(stub shim.ChaincodeStubInterface, args []string) pb.Response {
+	var A, B string        // Entities
+	var Aval, Bval float64 // Asset holdings
+	var X float64          // Transaction value
 	var err error
+	var accountA, accountB Account
 
-	var chainCodeToCall = args[0] //转账调用的chaincodeid
-	var loanId = args[1]
-	var customer = args[2]
-	var leader = args[3]
-	var balance float64 //贷款总额，参贷行的求和
-	var unionLoan UnionLoan
-	var participants [10]Participant
-
-	if len(args) < 5 || len(args)%2 == 0 {
-		return shim.Error("Incorrect number of arguments. Expecting Odd and >=5")
+	if len(args) != 3 {
+		return shim.Error("Incorrect number of arguments. Expecting 3")
 	}
+
+	A = args[0]
+	B = args[1]
 
 	// Get the state from the ledger
-	getByte, err := stub.GetState(loanId)
-	if getByte != nil {
-		jsonResp := "{\"Error\":\"Exsit Account:" + loanId + "\"}"
+	// TODO: will be nice to have a GetAllState call to ledger
+	Avalbytes, err := stub.GetState(A)
+	if err != nil {
+		return shim.Error("Failed to get state")
+	}
+	if Avalbytes == nil {
+		return shim.Error("Entity not found")
+	}
+
+	error := json.Unmarshal(Avalbytes, &accountA)
+	if error != nil {
+		jsonResp := "{\"Error\":\"json ummarshal " + fmt.Sprint(Avalbytes) + "\"}"
 		return shim.Error(jsonResp)
 	}
+	Aval = accountA.Balance
 
-	//循环读取参贷行信息
-	var count = 3
-	var i = 0
-	for count < len(args) {
-		participants[i].BankName = args[count]
-		amt, err = strconv.ParseFloat(args[count+1], 64)
-		if err != nil {
-			return shim.Error("Invalid transaction amount, expecting a float value")
+	Bvalbytes, err := stub.GetState(B)
+	if err == nil {
+		if Bvalbytes == nil {
+			Bval = 0
+		} else {
+			error := json.Unmarshal(Bvalbytes, &accountB)
+			if error != nil {
+				jsonResp := "{\"Error\":\"json ummarshal " + fmt.Sprint(Avalbytes) + "\"}"
+				return shim.Error(jsonResp)
+			}
+			Bval = accountB.Balance
 		}
-		participants[i].Balance = amt
-		balance += amt
-		count += 2
-		i += 1
+	} else { //账户不存在，新建账户worldstate
+		Bval = 0
 	}
-	var bankNum = i
 
-	unionLoan.Customer = customer
-	unionLoan.Balance = balance
-	unionLoan.Leader = leader
-	unionLoan.Participants = participants
+	// Perform the execution
+	X, err = strconv.ParseFloat(args[2], 64)
+	if err != nil {
+		return shim.Error("Invalid transaction amount, expecting a float value")
+	}
+	Aval = Aval - X
+	if Aval < 0 {
+		return shim.Error("Account:" + A + ", balance is insufficient")
+	}
+	Bval = Bval + X
+	fmt.Printf("Aval = %d, Bval = %d\n", Aval, Bval)
 
-	loanByte, err := json.Marshal(unionLoan)
+	accountB.Balance = Bval
+	accountA.Balance = Aval
+	// Write the state back to the ledger
+	AByte, err := json.Marshal(accountA)
 	if err != nil {
 		return shim.Error("build json failed!")
 	}
 
-	err = stub.PutState(loanId, loanByte)
+	err = stub.PutState(A, AByte)
 	if err != nil {
 		return shim.Error(err.Error())
 	}
 
-	//调用转账合约
-	f := "transferN2A"
-	i = 0
-	callArgs := make([]string, bankNum*2+2)
-	callArgs[0] = f
-	callArgs[1] = customer
-	for i < bankNum {
-		callArgs[2+i*2] = participants[i].BankName
-		callArgs[3+i*2] = strconv.FormatFloat(participants[i].Balance, 'f', 2, 64)
-		i += 1
+	BByte, err := json.Marshal(accountB)
+	if err != nil {
+		return shim.Error("build json failed!")
 	}
-	invokeArgs := util.ArrayToChaincodeArgs(callArgs)
-	response := stub.InvokeChaincode(chainCodeToCall, invokeArgs, "")
-	if response.Status != shim.OK {
-		errStr := fmt.Sprintf("Failed to invoke chaincode. Got error: %s", string(response.Payload))
-		fmt.Printf(errStr)
-		return shim.Error(errStr)
-	}
-	/*
-		f := "invoke"
-		i = 0
-		for i < bankNum {
-			invokeArgs := util.ToChaincodeArgs(f, participants[i].BankName, customer,
-				strconv.FormatFloat(participants[i].Balance, 'f', 2, 64))
-			response := stub.InvokeChaincode(chainCodeToCall, invokeArgs, "")
-			if response.Status != shim.OK {
-				errStr := fmt.Sprintf("Failed to invoke chaincode. Got error: %s", string(response.Payload))
-				fmt.Printf(errStr)
-				return shim.Error(errStr)
-			}
-			i += 1
-		}*/
 
-	return shim.Success(loanByte)
+	err = stub.PutState(B, BByte)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+
+	return shim.Success(nil)
 }
 
 // query callback representing the query of a chaincode
-func (t *UnionLoanChainCode) query(stub shim.ChaincodeStubInterface, args []string) pb.Response {
-	var loanId string // Entities
+func (t *CashChaincode) query(stub shim.ChaincodeStubInterface, args []string) pb.Response {
+	var A string // Entities
 	var err error
 
 	if len(args) != 1 {
 		return shim.Error("Incorrect number of arguments. Expecting name of the person to query")
 	}
 
-	loanId = args[0]
+	A = args[0]
 
 	// Get the state from the ledger
-	loanByte, err := stub.GetState(loanId)
+	Avalbytes, err := stub.GetState(A)
 	if err != nil {
-		jsonResp := "{\"Error\":\"Failed to get state for " + loanId + "\"}"
+		jsonResp := "{\"Error\":\"Failed to get state for " + A + "\"}"
 		return shim.Error(jsonResp)
 	}
 
-	if loanByte == nil {
-		jsonResp := "{\"Error\":\"Nil context for " + loanId + "\"}"
+	if Avalbytes == nil {
+		jsonResp := "{\"Error\":\"Nil amount for " + A + "\"}"
 		return shim.Error(jsonResp)
 	}
 
-	var unionLoan UnionLoan
-	error := json.Unmarshal(loanByte, &unionLoan)
-	if error != nil {
-		jsonResp := "{\"Error\":\"json ummarshal " + fmt.Sprint(loanByte) + "\"}"
-		return shim.Error(jsonResp)
+	jsonResp := "{\"Name\":\"" + A + "\",\"Amount\":\"" + string(Avalbytes) + "\"}"
+	fmt.Printf("Query Response:%s\n", jsonResp)
+	return shim.Success(Avalbytes)
+}
+
+// Transaction makes payment of X units from A1.A2...AN to B
+func (t *CashChaincode) transferN2A(stub shim.ChaincodeStubInterface, args []string) pb.Response {
+	var num int         //number of N
+	var receiver string //who receive money
+	var totalDelta float64
+	//var Aval, Bval float64 // Asset holdings
+	//var X float64          // Transaction value
+	var err error
+	//var accountA, accountB Account
+
+	if (len(args) % 2) != 1 {
+		return shim.Error("Incorrect number of arguments. Expecting odd number!")
 	}
-	return shim.Success(loanByte)
+
+	num = (len(args) - 1) / 2
+	receiver = args[0]
+	totalDelta = 0
+
+	count := 0
+	for count < num {
+		sender := args[count*2+1]
+		deltaString := args[count*2+2]
+		count += 1
+		delta, err := strconv.ParseFloat(deltaString, 64)
+		totalDelta += delta
+
+		var senderAccount Account
+		senderBytes, err := stub.GetState(sender)
+		if err != nil {
+			return shim.Error("Failed to get state")
+		}
+		if senderBytes == nil {
+			return shim.Error("Entity not found")
+		}
+
+		error := json.Unmarshal(senderBytes, &senderAccount)
+		if error != nil {
+			jsonResp := "{\"Error\":\"json ummarshal " + fmt.Sprint(senderBytes) + "\"}"
+			return shim.Error(jsonResp)
+		}
+		value := senderAccount.Balance
+		value -= delta
+		if value < 0 {
+			return shim.Error("Account:" + sender + ", balance is insufficient")
+		}
+		senderAccount.Balance = value
+
+		// Write the state back to the ledger
+		SByte, err := json.Marshal(senderAccount)
+		if err != nil {
+			return shim.Error("build json failed!")
+		}
+
+		err = stub.PutState(sender, SByte)
+		if err != nil {
+			return shim.Error(err.Error())
+		}
+
+	}
+
+	//receiver
+	var receiverAccount Account
+	var receiverValue float64
+	receiverBytes, err := stub.GetState(receiver)
+	if err == nil {
+		if receiverBytes == nil {
+			receiverValue = 0
+		} else {
+			error := json.Unmarshal(receiverBytes, &receiverAccount)
+			if error != nil {
+				jsonResp := "{\"Error\":\"json ummarshal " + fmt.Sprint(receiverBytes) + "\"}"
+				return shim.Error(jsonResp)
+			}
+			receiverValue = receiverAccount.Balance
+		}
+	} else { //账户不存在，新建账户worldstate
+		receiverValue = 0
+	}
+
+	receiverValue += totalDelta
+	receiverAccount.Balance = receiverValue
+
+	// Write the state back to the ledger
+	RByte, err := json.Marshal(receiverAccount)
+	if err != nil {
+		return shim.Error("build json failed!")
+	}
+
+	err = stub.PutState(receiver, RByte)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+
+	return shim.Success(nil)
 }
 
 func main() {
-	err := shim.Start(new(UnionLoanChainCode))
+	err := shim.Start(new(CashChaincode))
 	if err != nil {
 		fmt.Printf("Error starting Simple chaincode: %s", err)
 	}
